@@ -9,6 +9,7 @@ from discord.ext import commands
 import requests
 from dotenv import load_dotenv
 
+load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 API = "https://www.dreamcancel.com/w/api.php"
 ROSTER = [
