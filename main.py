@@ -10,11 +10,14 @@ from dotenv import load_dotenv
 from characters import ROSTER
 import dream_cancel as dc
 
+
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN is missing from the hosting environment.")
+    raise RuntimeError(
+        "DISCORD_TOKEN is missing from the hosting environment."
+    )
 
 
 class KOFBot(commands.Bot):
@@ -30,6 +33,7 @@ bot = KOFBot(command_prefix="!", intents=intents)
 def value_text(value):
     if value is None:
         return "Not listed"
+
     text = dc.clean_value(value)
     return text if text else "Not listed"
 
@@ -43,16 +47,13 @@ def get_field(move, *names):
 
 
 def make_move_embed(character, move, stale):
-    name = value_text(get_field(move, "name", "move", "title"))
+    move_input = value_text(get_field(move, "input"))
+    title = f"{character} — {move_input}"
+
     embed = discord.Embed(
-        title=name,
+        title=title,
         color=discord.Color.gold(),
         url=dc.source_page_url(character),
-    )
-
-    embed.description = (
-        f"**Input:** {value_text(get_field(move, 'input'))}\n"
-        f"**Character:** {character}"
     )
 
     fields = [
@@ -71,6 +72,7 @@ def make_move_embed(character, move, stale):
 
     for label, keys in fields:
         value = get_field(move, *keys)
+
         if value is not None:
             embed.add_field(
                 name=label,
@@ -82,8 +84,6 @@ def make_move_embed(character, move, stale):
         embed.set_footer(
             text="Using saved data: Dream Cancel refresh failed."
         )
-    else:
-        embed.set_footer(text="Source: Dream Cancel")
 
     return embed
 
@@ -91,10 +91,7 @@ def make_move_embed(character, move, stale):
 async def send_in_batches(interaction, embeds):
     for start in range(0, len(embeds), 10):
         batch = embeds[start:start + 10]
-        if start == 0:
-            await interaction.followup.send(embeds=batch)
-        else:
-            await interaction.followup.send(embeds=batch)
+        await interaction.followup.send(embeds=batch)
 
 
 @bot.tree.command(
@@ -103,7 +100,10 @@ async def send_in_batches(interaction, embeds):
 )
 @app_commands.describe(
     character="Choose a KOF XV character",
-    move="Enter a move name or input, such as cl.A, cr.B, 236+A or qcf+A",
+    move=(
+        "Enter a move name or input, such as cl.A, cr.B, "
+        "236+A or qcf+A"
+    ),
 )
 async def fd(
     interaction: discord.Interaction,
@@ -143,30 +143,32 @@ async def fd(
     if not matches:
         await interaction.followup.send(
             f"No matching moves found for **{character}** "
-            f"using `{move}`.\nTry notation such as `cl.A`, `cr.B`, "
-            "`236+A`, or `qcf+A`."
+            f"using `{move}`.\n"
+            "Try notation such as `cl.A`, `cr.B`, `236+A`, "
+            "or `qcf+A`."
         )
         return
 
-    embeds = [
+    # Send the frame-data embeds first.
+    move_embeds = [
         make_move_embed(character, item, stale)
         for item in matches
     ]
+    await send_in_batches(interaction, move_embeds)
 
-    await send_in_batches(interaction, embeds)
-
-    # Include every animation and hitbox image associated with
-    # every matching move, not just the first image.
+    # Send every distinct animation and hitbox image associated
+    # with the matching moves, using the original source URL.
     image_embeds = []
     seen = set()
 
     for item in matches:
-        move_name = value_text(
-            get_field(item, "name", "move", "title")
-        )
+        move_input = value_text(get_field(item, "input"))
 
-        for key in ("images", "hitboxes"):
-            raw_images = item.get(key)
+        for image_key, image_type in (
+            ("images", "Animation"),
+            ("hitboxes", "Hitbox"),
+        ):
+            raw_images = item.get(image_key)
             if not raw_images:
                 continue
 
@@ -175,6 +177,7 @@ async def fd(
             for filename in filenames:
                 if filename in seen:
                     continue
+
                 seen.add(filename)
 
                 try:
@@ -182,19 +185,27 @@ async def fd(
                         dc.get_image_url, filename
                     )
                 except Exception as exc:
-                    print(f"Image lookup failed for {filename}: {exc}")
+                    print(
+                        f"Image lookup failed for {filename}: {exc}"
+                    )
                     continue
 
                 if not image_url:
+                    print(f"No source image URL found for {filename}")
                     continue
 
                 image_embed = discord.Embed(
-                    title=f"{move_name} — "
-                          f"{'Animation' if key == 'images' else 'Hitbox'}",
+                    title=(
+                        f"{character} — {move_input} — {image_type}"
+                    ),
                     color=discord.Color.dark_gold(),
                     url=dc.source_page_url(character),
                 )
-                image_embed.description = f"File: `{filename}`"
+
+                # No fixed width or height is applied here.
+                # Discord receives the original image URL returned
+                # by Dream Cancel's MediaWiki image information API.
+                # Discord still controls the final on-screen rendering.
                 image_embed.set_image(url=image_url)
                 image_embeds.append(image_embed)
 
@@ -204,7 +215,8 @@ async def fd(
     print(
         f"/fd: {interaction.user} searched "
         f"{character} for {move!r}; "
-        f"{len(matches)} move(s), {len(image_embeds)} image(s)."
+        f"{len(matches)} move(s), "
+        f"{len(image_embeds)} image(s)."
     )
 
 
@@ -226,7 +238,9 @@ async def character_autocomplete(
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} — KOF XV bot is online.")
+    print(
+        f"Logged in as {bot.user} — KOF XV bot is online."
+    )
 
 
 bot.run(TOKEN)
