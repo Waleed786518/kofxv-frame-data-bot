@@ -8,7 +8,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
-from PIL import Image
 
 from characters import ROSTER
 import dream_cancel as dc
@@ -36,6 +35,7 @@ bot = KOFBot(command_prefix="!", intents=intents)
 def value_text(value):
     if value is None:
         return "Not listed"
+
     text = dc.clean_value(value)
     return text if text else "Not listed"
 
@@ -73,6 +73,7 @@ def make_move_embed(character, move, stale):
 
     for label, keys in fields:
         value = get_field(move, *keys)
+
         if value is not None:
             embed.add_field(
                 name=label,
@@ -89,6 +90,7 @@ def make_move_embed(character, move, stale):
 
 
 def download_image(image_url):
+    """Download the original image bytes without resizing or padding."""
     response = dc.SESSION.get(
         image_url,
         timeout=dc.REQUEST_TIMEOUT,
@@ -104,67 +106,14 @@ def download_image(image_url):
     return response.content
 
 
-def add_image_margin(image_bytes, margin_ratio=0.50):
-    """Add 50% padding on all four sides without resizing the artwork."""
-    with Image.open(io.BytesIO(image_bytes)) as source:
-        image = source.convert("RGBA")
-        width, height = image.size
-
-        if width < 1 or height < 1:
-            raise ValueError("The source image has invalid dimensions.")
-
-        pixels = image.load()
-        edge_colors = []
-
-        # Sample the top and bottom edges.
-        for x in range(width):
-            for y in {0, height - 1}:
-                red, green, blue, alpha = pixels[x, y]
-                if alpha > 16:
-                    edge_colors.append((red, green, blue))
-
-        # Sample the left and right edges.
-        for y in range(height):
-            for x in {0, width - 1}:
-                red, green, blue, alpha = pixels[x, y]
-                if alpha > 16:
-                    edge_colors.append((red, green, blue))
-
-        if edge_colors:
-            count = len(edge_colors)
-            background = tuple(
-                round(
-                    sum(color[channel] for color in edge_colors) / count
-                )
-                for channel in range(3)
-            )
-        else:
-            background = (32, 32, 32)
-
-        pad_x = max(1, round(width * margin_ratio))
-        pad_y = max(1, round(height * margin_ratio))
-
-        canvas = Image.new(
-            "RGBA",
-            (width + 2 * pad_x, height + 2 * pad_y),
-            (*background, 255),
-        )
-        canvas.alpha_composite(image, (pad_x, pad_y))
-
-        output = io.BytesIO()
-        canvas.save(output, format="PNG", optimize=True)
-        return output.getvalue()
-
-
 def safe_attachment_name(filename, number):
     filename = filename.rsplit("/", 1)[-1]
     filename = re.sub(r"[^A-Za-z0-9._-]+", "_", filename)
 
-    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
-    if not stem:
-        stem = "image"
+    if not filename:
+        filename = "image.png"
 
-    return f"image_{number}_{stem}_padded.png"
+    return f"image_{number}_{filename}"
 
 
 async def send_in_batches(interaction, embeds):
@@ -175,8 +124,10 @@ async def send_in_batches(interaction, embeds):
 
 
 async def send_image_pairs(interaction, image_items):
+    """Send at most two image embeds and files per message."""
     for start in range(0, len(image_items), 2):
         batch = image_items[start:start + 2]
+
         embeds = [item[0] for item in batch]
         files = [item[1] for item in batch]
 
@@ -262,6 +213,7 @@ async def fd(
             for filename in dc.image_filenames(raw_images):
                 if filename in seen:
                     continue
+
                 seen.add(filename)
 
                 try:
@@ -275,11 +227,9 @@ async def fd(
                         )
                         continue
 
-                    original_bytes = await asyncio.to_thread(
+                    # Keep the downloaded image unchanged.
+                    image_bytes = await asyncio.to_thread(
                         download_image, image_url
-                    )
-                    padded_bytes = await asyncio.to_thread(
-                        add_image_margin, original_bytes
                     )
 
                     image_number += 1
@@ -297,9 +247,10 @@ async def fd(
                     )
 
                     image_file = discord.File(
-                        io.BytesIO(padded_bytes),
+                        io.BytesIO(image_bytes),
                         filename=attachment_name,
                     )
+
                     image_items.append((image_embed, image_file))
 
                 except Exception as exc:
@@ -314,7 +265,7 @@ async def fd(
         f"/fd: {interaction.user} searched "
         f"{character} for {move!r}; "
         f"{len(matches)} move(s), "
-        f"{len(image_items)} padded image(s), "
+        f"{len(image_items)} image(s), "
         f"{(len(image_items) + 1) // 2} image message(s)."
     )
 
@@ -325,11 +276,13 @@ async def character_autocomplete(
     current: str,
 ):
     current = current.casefold()
+
     results = [
         app_commands.Choice(name=name, value=name)
         for name in ROSTER
         if current in name.casefold()
     ]
+
     return results[:25]
 
 
