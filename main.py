@@ -107,7 +107,7 @@ def download_image(image_url):
     return response.content
 
 
-def add_image_margin(image_bytes, margin_ratio=0.30):
+def add_image_margin(image_bytes, margin_ratio=0.10):
     """Add 30% transparent padding on every side without cropping."""
     with Image.open(io.BytesIO(image_bytes)) as source:
         image = source.convert("RGBA")
