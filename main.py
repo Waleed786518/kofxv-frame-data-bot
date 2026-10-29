@@ -104,8 +104,8 @@ def download_image(image_url):
     return response.content
 
 
-def add_image_margin(image_bytes, margin_ratio=0.30):
-    """Add a 30% margin to every side without stretching the artwork."""
+def add_image_margin(image_bytes, margin_ratio=0.50):
+    """Add 50% padding on all four sides without resizing the artwork."""
     with Image.open(io.BytesIO(image_bytes)) as source:
         image = source.convert("RGBA")
         width, height = image.size
@@ -116,12 +116,14 @@ def add_image_margin(image_bytes, margin_ratio=0.30):
         pixels = image.load()
         edge_colors = []
 
+        # Sample the top and bottom edges.
         for x in range(width):
             for y in {0, height - 1}:
                 red, green, blue, alpha = pixels[x, y]
                 if alpha > 16:
                     edge_colors.append((red, green, blue))
 
+        # Sample the left and right edges.
         for y in range(height):
             for x in {0, width - 1}:
                 red, green, blue, alpha = pixels[x, y]
