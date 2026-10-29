@@ -7,6 +7,7 @@ from urllib.parse import quote
 import discord
 from discord.ext import commands
 import requests
+from dotenv import load_dotenv
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 API = "https://www.dreamcancel.com/w/api.php"
