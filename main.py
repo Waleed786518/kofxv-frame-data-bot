@@ -1,8 +1,8 @@
 
 import os
 import asyncio
-import io
 import re
+import io
 
 import discord
 from discord import app_commands
@@ -28,8 +28,10 @@ class KOFBot(commands.Bot):
         print(f"Synced {len(synced)} slash command(s).")
 
 
-intents = discord.Intents.default()
-bot = KOFBot(command_prefix="!", intents=intents)
+bot = KOFBot(
+    command_prefix="!",
+    intents=discord.Intents.default(),
+)
 
 
 def value_text(value):
@@ -73,7 +75,6 @@ def make_move_embed(character, move, stale):
 
     for label, keys in fields:
         value = get_field(move, *keys)
-
         if value is not None:
             embed.add_field(
                 name=label,
@@ -90,7 +91,7 @@ def make_move_embed(character, move, stale):
 
 
 def download_image(image_url):
-    """Download the original image bytes without resizing or padding."""
+    """Download the original image without adding margin or padding."""
     response = dc.SESSION.get(
         image_url,
         timeout=dc.REQUEST_TIMEOUT,
@@ -123,17 +124,12 @@ async def send_in_batches(interaction, embeds):
         )
 
 
-async def send_image_pairs(interaction, image_items):
-    """Send at most two image embeds and files per message."""
-    for start in range(0, len(image_items), 2):
-        batch = image_items[start:start + 2]
-
-        embeds = [item[0] for item in batch]
-        files = [item[1] for item in batch]
-
+async def send_images_individually(interaction, image_items):
+    """Send each image separately for a larger Discord preview."""
+    for embed, image_file in image_items:
         await interaction.followup.send(
-            embeds=embeds,
-            files=files,
+            embed=embed,
+            file=image_file,
         )
 
 
@@ -171,9 +167,11 @@ async def fd(
 
     try:
         moves, stale = await asyncio.to_thread(
-            dc.get_character_moves, character
+            dc.get_character_moves,
+            character,
         )
         matches = dc.find_moves(moves, move.strip())
+
     except Exception as exc:
         print(f"Frame-data lookup failed for {character}: {exc}")
         await interaction.followup.send(
@@ -218,7 +216,8 @@ async def fd(
 
                 try:
                     image_url = await asyncio.to_thread(
-                        dc.get_image_url, filename
+                        dc.get_image_url,
+                        filename,
                     )
 
                     if not image_url:
@@ -227,14 +226,15 @@ async def fd(
                         )
                         continue
 
-                    # Keep the downloaded image unchanged.
                     image_bytes = await asyncio.to_thread(
-                        download_image, image_url
+                        download_image,
+                        image_url,
                     )
 
                     image_number += 1
                     attachment_name = safe_attachment_name(
-                        filename, image_number
+                        filename,
+                        image_number,
                     )
 
                     image_embed = discord.Embed(
@@ -259,14 +259,16 @@ async def fd(
                     )
 
     if image_items:
-        await send_image_pairs(interaction, image_items)
+        await send_images_individually(
+            interaction,
+            image_items,
+        )
 
     print(
         f"/fd: {interaction.user} searched "
         f"{character} for {move!r}; "
         f"{len(matches)} move(s), "
-        f"{len(image_items)} image(s), "
-        f"{(len(image_items) + 1) // 2} image message(s)."
+        f"{len(image_items)} image(s)."
     )
 
 
