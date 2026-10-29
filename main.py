@@ -5,353 +5,514 @@ import asyncio
 from urllib.parse import quote
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 import requests
 from dotenv import load_dotenv
 
 load_dotenv()
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 API = "https://www.dreamcancel.com/w/api.php"
+
 ROSTER = [
     "Andy Bogard", "Ángel", "Antonov", "Ash Crimson",
-    "Athena Asamiya", "B.Jenet", "Benimaru Nikaido", "Billy Kane",
-    "Blue Mary", "Chizuru Kagura", "Chris", "Clark Still",
-    "Darli Dagger", "Dolores", "Duo Lon", "Elisabeth Blanctorche",
-    "Gato", "Geese Howard", "Goenitz", "Haohmaru", "Heidern",
-    "Hinako Shijo", "Iori Yagami", "Isla", "Joe Higashi", "K'",
-    "Kim Kaphwan", "King", "King of Dinosaurs", "Krohnen", "Kukri",
-    "Kula Diamond", "Kyo Kusanagi", "Leona Heidern", "Luong",
-    "Mai Shiranui", "Mature", "Maxima", "Meitenkun", "Nakoruru",
-    "Najd", "Omega Rugal", "Orochi Chris", "Orochi Shermie",
-    "Orochi Yashiro", "Ralf Jones", "Ramón", "Robert Garcia",
-    "Rock Howard", "Ryo Sakazaki", "Shermie", "Shingo Yabuki",
-    "Shun'ei", "Sylvie Paula Paula", "Terry Bogard", "Vanessa",
-    "Vice", "Whip", "Ryuji Yamazaki", "Yashiro Nanakase",
-    "Yuri Sakazaki",
+    "Athena Asamiya", "B.Jenet", "Benimaru Nikaido",
+    "Billy Kane", "Blue Mary", "Chizuru Kagura", "Chris",
+    "Clark Still", "Darli Dagger", "Dolores", "Duo Lon",
+    "Elisabeth Blanctorche", "Gato", "Geese Howard",
+    "Goenitz", "Haohmaru", "Heidern", "Hinako Shijo",
+    "Iori Yagami", "Isla", "Joe Higashi", "K'",
+    "Kim Kaphwan", "King", "King of Dinosaurs", "Krohnen",
+    "Kukri", "Kula Diamond", "Kyo Kusanagi",
+    "Leona Heidern", "Luong", "Mai Shiranui", "Mature",
+    "Maxima", "Meitenkun", "Nakoruru", "Najd",
+    "Omega Rugal", "Orochi Chris", "Orochi Shermie",
+    "Orochi Yashiro", "Ralf Jones", "Ramón",
+    "Robert Garcia", "Rock Howard", "Ryo Sakazaki",
+    "Shermie", "Shingo Yabuki", "Shun'ei",
+    "Sylvie Paula Paula", "Terry Bogard", "Vanessa",
+    "Vice", "Whip", "Ryuji Yamazaki",
+    "Yashiro Nanakase", "Yuri Sakazaki",
 ]
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "KOFXVFrameDataBot/1.0 (Discord bot)"
+})
 
 
 def api_get(params):
-    response = requests.get(
-        API,
-        params=params,
-        timeout=25,
-        headers={"User-Agent": "KOFXVFrameDataDiscordBot/1.0"},
-    )
+    response = session.get(API, params=params, timeout=25)
     response.raise_for_status()
     data = response.json()
+
     if "error" in data:
         raise RuntimeError(data["error"].get("info", "Dream Cancel API error"))
+
     return data
 
 
-def page_title(character):
-    return f"The King of Fighters XV/{character}/Data"
+def character_page(character):
+    return (
+        "The_King_of_Fighters_XV/"
+        + character.replace(" ", "_")
+        + "/Data"
+    )
 
 
-def fetch_wikitext(character):
+def get_wikitext(character):
     data = api_get({
         "action": "query",
         "prop": "revisions",
-        "titles": page_title(character),
+        "titles": character_page(character),
         "rvprop": "ids|timestamp|content",
         "rvslots": "main",
         "format": "json",
         "formatversion": "2",
     })
+
     pages = data.get("query", {}).get("pages", [])
+
     if not pages or pages[0].get("missing") is not None:
-        raise ValueError(f"Dream Cancel has no data page for {character}.")
-    page = pages[0]
-    revision = page["revisions"][0]
-    content = revision["slots"]["main"].get("content", "")
-    if not content:
-        raise ValueError("The page returned no readable wikitext.")
-    return content, revision
+        raise LookupError(
+            f"Dream Cancel has no data page for {character}."
+        )
+
+    revisions = pages[0].get("revisions", [])
+    if not revisions:
+        raise LookupError("Dream Cancel returned no page revision.")
+
+    revision = revisions[0]
+    slots = revision.get("slots", {})
+    main = slots.get("main", {})
+
+    text = main.get("content", main.get("*", ""))
+
+    if not text:
+        raise LookupError("The Dream Cancel page contained no wikitext.")
+
+    return text
 
 
-def split_template_fields(body):
-    """Split template parameters without splitting inside nested templates."""
-    fields = {}
-    parts = []
-    start = 0
-    depth = 0
-    i = 0
-    while i < len(body):
-        if body.startswith("{{", i):
-            depth += 1
-            i += 2
-            continue
-        if body.startswith("}}", i) and depth:
-            depth -= 1
-            i += 2
-            continue
-        if body[i] == "|" and depth == 0:
-            parts.append(body[start:i])
-            start = i + 1
-        i += 1
-    parts.append(body[start:])
+def extract_move_templates(wikitext):
+    """Extract MoveData-KOFXV templates, including nested templates."""
+    results = []
+    marker = "{{MoveData-KOFXV"
+    search_from = 0
 
-    for part in parts:
-        if "=" not in part:
-            continue
-        key, value = part.split("=", 1)
-        fields[key.strip().lower()] = value.strip()
-    return fields
+    while True:
+        start = wikitext.find(marker, search_from)
 
-
-def extract_templates(wikitext):
-    """Find MoveData-KOFXV templates, including nested parameter markup."""
-    found = []
-    i = 0
-    while i < len(wikitext):
-        if not wikitext.startswith("{{", i):
-            i += 1
-            continue
-        start = i
-        depth = 0
-        j = i
-        while j < len(wikitext):
-            if wikitext.startswith("{{", j):
-                depth += 1
-                j += 2
-                continue
-            if wikitext.startswith("}}", j):
-                depth -= 1
-                j += 2
-                if depth == 0:
-                    break
-                continue
-            j += 1
-        if depth != 0:
+        if start == -1:
             break
 
-        raw = wikitext[start + 2:j - 2]
-        name = raw.split("|", 1)[0].strip().lower()
-        if name == "movedata-kofxv":
-            fields = split_template_fields(raw[len(raw.split("|", 1)[0]):].lstrip("|"))
-            found.append((start, fields))
-        i = j
-    return found
+        depth = 0
+        i = start
+        end = None
 
+        while i < len(wikitext) - 1:
+            pair = wikitext[i:i + 2]
 
-def clean_markup(value):
-    value = re.sub(r"<ref[^>]*>.*?</ref>", "", value, flags=re.I | re.S)
-    value = re.sub(r"<ref[^/]*/\s*>", "", value, flags=re.I)
-    value = re.sub(r"\[\[([^|\]]+)\|([^\]]+)\]\]", r"\2", value)
-    value = re.sub(r"\[\[([^\]]+)\]\]", r"\1", value)
-    value = re.sub(r"\{\{[^{}]*\}\}", "", value)
-    value = re.sub(r"'''?", "", value)
-    value = re.sub(r"<[^>]+>", "", value)
-    return value.strip()
+            if pair == "{{":
+                depth += 1
+                i += 2
+                continue
 
+            if pair == "}}":
+                depth -= 1
+                i += 2
 
-def headings_before(wikitext, position):
-    headings = re.findall(
-        r"(?m)^(={2,6})\s*(.*?)\s*\1\s*$",
-        wikitext[:position],
-    )
-    return [clean_markup(title) for _, title in headings]
+                if depth == 0:
+                    end = i
+                    break
 
+                continue
 
-def parse_moves(character, wikitext):
-    moves = []
-    templates = extract_templates(wikitext)
-    for index, (position, fields) in enumerate(templates):
-        end = templates[index + 1][0] if index + 1 < len(templates) else len(wikitext)
-        nearby = wikitext[position:end]
-        fields = {key: clean_markup(value) for key, value in fields.items()}
-        name = fields.get("name", "").strip()
-        move_input = fields.get("input", "").strip()
-        if not name and not move_input:
-            continue
+            i += 1
 
-        moves.append({
-            "character": character,
-            "name": name or move_input,
-            "input": move_input,
-            "headings": headings_before(wikitext, position),
-            "fields": fields,
-            "images": split_filenames(fields.get("images", "")),
-            "hitboxes": split_filenames(fields.get("hitboxes", "")),
-            "source_section": clean_markup(nearby[:500]),
-        })
-    return moves
+        if end is None:
+            break
 
+        results.append(wikitext[start:end])
+        search_from = end
 
-def split_filenames(value):
-    return [
-        item.strip().replace("File:", "").replace("Image:", "")
-        for item in re.split(r"[,;\n]", value)
-        if item.strip()
-    ]
-
-
-def normalize_input(value):
-    value = value.lower().replace(" ", "")
-    value = value.replace("qcf", "236").replace("qcb", "214")
-    value = value.replace("hcf", "41236").replace("hcb", "63214")
-    value = value.replace("dp", "623").replace("charge", "")
-    value = value.replace("+", "")
-    return value
-
-
-def find_moves(moves, query):
-    wanted = normalize_input(query)
-    results = []
-    for move in moves:
-        candidates = [move["name"], move["input"]]
-        if any(
-            wanted == normalize_input(candidate)
-            or wanted in normalize_input(candidate)
-            for candidate in candidates if candidate
-        ):
-            results.append(move)
     return results
 
 
-def image_urls(filenames):
-    if not filenames:
+def split_top_level(text, separator="|"):
+    """Split template arguments without splitting nested templates."""
+    parts = []
+    current = []
+    depth = 0
+    i = 0
+
+    while i < len(text):
+        pair = text[i:i + 2]
+
+        if pair == "{{":
+            depth += 1
+            current.append(pair)
+            i += 2
+            continue
+
+        if pair == "}}":
+            depth = max(0, depth - 1)
+            current.append(pair)
+            i += 2
+            continue
+
+        if text[i] == separator and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(text[i])
+
+        i += 1
+
+    parts.append("".join(current).strip())
+    return parts
+
+
+def parse_template(template):
+    body = template[2:-2]
+    parts = split_top_level(body)
+
+    fields = {}
+
+    for part in parts[1:]:
+        if "=" not in part:
+            continue
+
+        key, value = part.split("=", 1)
+        fields[key.strip().lower()] = value.strip()
+
+    return fields
+
+
+def clean_value(value):
+    value = re.sub(r"<[^>]+>", "", value)
+    value = value.replace("'''", "").replace("''", "")
+    value = value.replace("[[", "").replace("]]", "")
+    return value.strip()
+
+
+def parse_moves(wikitext):
+    moves = []
+
+    for template in extract_move_templates(wikitext):
+        fields = parse_template(template)
+
+        if not fields.get("name") and not fields.get("input"):
+            continue
+
+        moves.append(fields)
+
+    return moves
+
+
+def normalize_move(value):
+    """Normalize common move notation for matching."""
+    value = value.lower().strip()
+
+    replacements = [
+        (r"\bquarter\s*circle\s*forward\b", "236"),
+        (r"\bquarter\s*circle\s*back(?:ward)?\b", "214"),
+        (r"\bqcf\b", "236"),
+        (r"\bqcb\b", "214"),
+        (r"\bhcf\b", "41236"),
+        (r"\bhcb\b", "63214"),
+        (r"\bdp\b", "623"),
+        (r"\bdragon\s*punch\b", "623"),
+        (r"\bhalf\s*circle\s*forward\b", "41236"),
+        (r"\bhalf\s*circle\s*back(?:ward)?\b", "63214"),
+    ]
+
+    for pattern, replacement in replacements:
+        value = re.sub(pattern, replacement, value)
+
+    return re.sub(r"[^a-z0-9]", "", value)
+
+
+def find_moves(moves, requested):
+    query = normalize_move(requested)
+
+    if not query:
         return []
-    params = {
-        "action": "query",
-        "titles": "|".join("File:" + name for name in filenames),
-        "prop": "imageinfo",
-        "iiprop": "url",
-        "format": "json",
-    }
-    data = api_get(params)
-    output = []
-    for page in data.get("query", {}).get("pages", {}).values():
-        info = page.get("imageinfo", [])
-        if info:
-            output.append((page.get("title", "Image"), info[0]["url"]))
-    return output
+
+    exact = []
+    partial = []
+
+    for move in moves:
+        candidates = [
+            clean_value(move.get("name", "")),
+            clean_value(move.get("input", "")),
+            clean_value(move.get("moveid", "")),
+        ]
+
+        normalized = [normalize_move(x) for x in candidates if x]
+
+        if query in normalized:
+            exact.append(move)
+        elif any(
+            query in candidate or candidate in query
+            for candidate in normalized
+            if candidate
+        ):
+            partial.append(move)
+
+    return exact if exact else partial
 
 
-def make_embed(character, move):
-    fields = move["fields"]
-    embed = discord.Embed(
-        title=f"{character} — {move['name']}",
-        description=f"**Input:** {move['input'] or 'Not listed'}",
-        color=discord.Color.gold(),
-        url="https://www.dreamcancel.com/wiki/"
-            + quote(page_title(character).replace(" ", "_"), safe="/_"),
-    )
-    if move["headings"]:
-        embed.add_field(
-            name="Page headings",
-            value="\n".join(move["headings"][-5:])[:1024],
-            inline=False,
+def image_filenames(value):
+    """Read image filenames from comma-separated template values."""
+    names = []
+
+    for part in value.split(","):
+        part = part.strip()
+        part = re.sub(r"^\[\[(?:File|Image):", "", part,
+                      flags=re.IGNORECASE)
+        part = part.split("|", 1)[0]
+        part = part.replace("]]", "").strip()
+
+        match = re.search(
+            r"([^/]+?\.(?:png|jpe?g|gif|webp|svg))$",
+            part,
+            flags=re.IGNORECASE,
         )
 
-    # Keep all available move fields; do not collapse bracketed values.
-    skip = {"name", "input", "images", "hitboxes", "character"}
-    for key, value in fields.items():
-        if key not in skip and value:
-            label = key.replace("_", " ").title()
-            embed.add_field(name=label[:256], value=value[:1024], inline=True)
+        if match:
+            filename = match.group(1).strip()
+            if filename not in names:
+                names.append(filename)
 
-    embed.set_footer(text="Frame data source: Dream Cancel")
+    return names
+
+
+def get_image_url(filename):
+    """Resolve a real Dream Cancel image URL through MediaWiki."""
+    data = api_get({
+        "action": "query",
+        "titles": "File:" + filename,
+        "prop": "imageinfo",
+        "iiprop": "url",
+        "iiurlwidth": "1000",
+        "format": "json",
+        "formatversion": "2",
+    })
+
+    pages = data.get("query", {}).get("pages", [])
+
+    if not pages:
+        return None
+
+    imageinfo = pages[0].get("imageinfo", [])
+
+    if not imageinfo:
+        return None
+
+    return (
+        imageinfo[0].get("thumburl")
+        or imageinfo[0].get("url")
+    )
+
+
+def field_value(fields, *keys):
+    for key in keys:
+        value = fields.get(key.lower())
+
+        if value and value.strip():
+            return clean_value(value)
+
+    return "—"
+
+
+def make_move_embed(character, move):
+    name = field_value(move, "name")
+    input_value = field_value(move, "input")
+
+    embed = discord.Embed(
+        title=f"{character} — {name}",
+        description=f"**Input:** {input_value}",
+        color=discord.Color.dark_red(),
+        url="https://www.dreamcancel.com/wiki/"
+            + quote(character_page(character), safe="/_"),
+    )
+
+    # Show all available frame-data properties.
+    properties = [
+        ("Damage", "damage"),
+        ("Guard", "guard"),
+        ("Cancel", "cancel"),
+        ("Startup", "startup"),
+        ("Active", "active"),
+        ("Recovery", "recovery"),
+        ("Hit advantage", "hitadv"),
+        ("Block advantage", "blockadv"),
+        ("Invulnerability", "invul"),
+        ("Stun", "stun"),
+        ("Guard damage", "guarddamage"),
+        ("Version", "version"),
+    ]
+
+    for label, key in properties:
+        value = move.get(key)
+
+        if value and value.strip():
+            embed.add_field(
+                name=label,
+                value=clean_value(value)[:1024],
+                inline=True,
+            )
+
+    embed.set_footer(
+        text="Source: Dream Cancel • Verify details against the source page"
+    )
+
     return embed
+
+
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} — KOF XV bot is online.")
-
-
-@bot.command(name="characters")
-async def characters(ctx):
-    await ctx.send("**KOF XV roster (Dream Cancel order):**\n" +
-                   "\n".join(f"{i}. {name}" for i, name in enumerate(ROSTER, 1)))
-
-
-@bot.command(name="move")
-async def move_command(ctx, *, search: str):
-    """
-    Usage: !move Andy Bogard | cl.A
-    Separate character and move with a vertical bar.
-    """
-    if "|" not in search:
-        await ctx.send(
-            "Use `!move Character Name | move input`\n"
-            "Example: `!move Andy Bogard | cl.A`\n"
-            "Notation examples: `236+A`, `qcf+A`, `j.C`."
-        )
-        return
-
-    character_text, move_query = [part.strip() for part in search.split("|", 1)]
-    character = next(
-        (name for name in ROSTER if name.casefold() == character_text.casefold()),
-        None,
-    )
-    if not character:
-        await ctx.send(
-            "I couldn't match that character to the roster. "
-            "Use `!characters` to see the exact names."
-        )
-        return
-
-    if not move_query:
-        await ctx.send("Please include a move input, such as `cl.A` or `236+A`.")
-        return
-
-    await ctx.typing()
     try:
-        wikitext, revision = await asyncio.to_thread(fetch_wikitext, character)
-        moves = await asyncio.to_thread(parse_moves, character, wikitext)
-        matches = find_moves(moves, move_query)
+        synced = await bot.tree.sync()
+        print(f"Logged in as {bot.user}")
+        print(f"Synced {len(synced)} global slash command(s).")
+    except Exception as exc:
+        print(f"Slash-command sync failed: {exc}")
 
-        if not matches:
-            await ctx.send(
-                f"No exact move match found for **{character} — {move_query}**. "
-                "Try the notation shown on Dream Cancel."
+
+async def character_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+):
+    query = current.casefold().strip()
+
+    matches = [
+        character for character in ROSTER
+        if query in character.casefold()
+    ]
+
+    return [
+        app_commands.Choice(name=character, value=character)
+        for character in matches[:25]
+    ]
+
+
+@bot.tree.command(
+    name="fd",
+    description="Look up KOF XV move frame data from Dream Cancel.",
+)
+@app_commands.describe(
+    character="Choose a KOF XV character",
+    move="Move name or input, e.g. cl.A, cr.B, 236+A, qcf+A",
+)
+@app_commands.autocomplete(character=character_autocomplete)
+async def fd(
+    interaction: discord.Interaction,
+    character: str,
+    move: str,
+):
+    await interaction.response.defer(thinking=True)
+
+    if character not in ROSTER:
+        await interaction.followup.send(
+            "Please choose a character from the autocomplete list.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        wikitext = await asyncio.to_thread(get_wikitext, character)
+        moves = parse_moves(wikitext)
+
+        if not moves:
+            await interaction.followup.send(
+                f"No MoveData-KOFXV entries were found for {character}. "
+                "The Dream Cancel page format may have changed."
             )
             return
 
-        await ctx.send(
-            f"Found **{len(matches)}** matching move section(s) for **{character}**. "
-            f"Source revision: `{revision.get('revid', 'unknown')}`."
-        )
+        matches = find_moves(moves, move)
 
-        for move in matches[:5]:
-            await ctx.send(embed=make_embed(character, move))
-            all_files = move["images"] + move["hitboxes"]
-            if all_files:
-                try:
-                    resolved = await asyncio.to_thread(image_urls, all_files)
-                    for title, url in resolved:
-                        await ctx.send(f"**{title}**\n{url}")
-                except Exception as exc:
-                    await ctx.send(
-                        "Some image URLs could not be resolved: "
-                        + str(exc)[:300]
-                    )
-
-        if len(matches) > 5:
-            await ctx.send(
-                f"There are {len(matches)} matches; showing the first 5. "
-                "Narrow the move input to get a smaller result."
+        if not matches:
+            await interaction.followup.send(
+                f"No matching move found for **{character}** "
+                f"with input/name `{move}`.\n"
+                "Try the move name or a different notation, "
+                "such as `cl.A`, `cr.B`, or `236+A`."
             )
+            return
+
+        # Show every exact match, or the best available partial matches.
+        for index, result in enumerate(matches[:5]):
+            embed = make_move_embed(character, result)
+
+            if index == 0 and len(matches) > 1:
+                embed.description = (
+                    (embed.description or "")
+                    + f"\n**Matches found:** {len(matches)}"
+                )
+
+            await interaction.followup.send(embed=embed)
+
+            # Show all resolved animation and hitbox images.
+            for field, label in [
+                ("images", "Animation"),
+                ("hitboxes", "Hitbox"),
+            ]:
+                filenames = image_filenames(result.get(field, ""))
+
+                for filename in filenames:
+                    try:
+                        url = await asyncio.to_thread(
+                            get_image_url, filename
+                        )
+
+                        if not url:
+                            continue
+
+                        image_embed = discord.Embed(
+                            title=f"{label}: {filename}",
+                            color=discord.Color.dark_red(),
+                        )
+                        image_embed.set_image(url=url)
+
+                        await interaction.followup.send(
+                            embed=image_embed
+                        )
+
+                    except Exception as image_error:
+                        print(
+                            f"Could not resolve image {filename}: "
+                            f"{image_error}"
+                        )
 
     except requests.RequestException as exc:
-        await ctx.send(
-            "I couldn't reach Dream Cancel right now. Please try again later.\n"
-            f"`{str(exc)[:250]}`"
+        print(f"Dream Cancel request failed: {exc}")
+        await interaction.followup.send(
+            "I couldn't reach Dream Cancel right now. Please try again."
         )
-    except (ValueError, RuntimeError, KeyError, TypeError) as exc:
-        await ctx.send(f"Couldn't read that Dream Cancel page: `{str(exc)[:300]}`")
+
+    except LookupError as exc:
+        await interaction.followup.send(str(exc))
+
+    except Exception as exc:
+        print(f"/fd error for {character}, {move}: {exc}")
+        await interaction.followup.send(
+            "Something went wrong while reading the move data. "
+            "The error has been logged for troubleshooting."
+        )
 
 
 if not TOKEN:
     raise RuntimeError(
         "Missing DISCORD_TOKEN environment variable. "
-        "Set it in the hosting panel's secret/environment settings."
+        "Set it in the hosting panel's environment variables."
     )
 
 bot.run(TOKEN)
