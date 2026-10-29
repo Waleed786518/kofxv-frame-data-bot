@@ -1,4 +1,4 @@
-
+```python
 import json
 import re
 import time
@@ -36,15 +36,43 @@ def clean_value(value):
 
 
 def normalize_move(value):
-    """Normalize common move-input aliases for flexible searching."""
+    """
+    Normalize alternate spellings for searching only.
+
+    Examples:
+      cl.A, cl+A, cla       -> cla
+      j.AC, jA+C, jAC       -> jac
+      4/6.C, 4/6+C, 4/6c   -> 46c
+      236+A, qcf+A          -> qcfa
+      214+B, qcb+B          -> qcbb
+    """
     value = clean_value(value).casefold().strip()
-    value = value.replace(" ", "")
-    value = value.replace("236+", "qcf+")
-    value = value.replace("214+", "qcb+")
-    value = value.replace("41236+", "hcf+")
-    value = value.replace("63214+", "hcb+")
-    value = value.replace("623+", "dp+")
+
+    # Remove common directional arrows and whitespace.
     value = value.replace("→", "")
+    value = re.sub(r"\s+", "", value)
+
+    # Convert numeric motion notation to named shorthand before
+    # removing punctuation.
+    motion_aliases = (
+        ("41236", "hcf"),
+        ("63214", "hcb"),
+        ("236", "qcf"),
+        ("214", "qcb"),
+        ("623", "dp"),
+    )
+
+    for numeric, shorthand in motion_aliases:
+        value = re.sub(
+            rf"(?<!\d){numeric}(?=[+.]?[a-z])",
+            shorthand,
+            value,
+        )
+
+    # Normalize separators and punctuation. This makes cl.A, cl+A,
+    # cla and j.AC, jA+C, jAC searchable with the same key.
+    value = re.sub(r"[^a-z0-9]", "", value)
+
     return value
 
 
@@ -299,7 +327,12 @@ def get_character_moves(character):
 
 
 def find_moves(moves, query):
-    """Find moves by name, input, move ID, or common input alias."""
+    """
+    Find moves by name, input, move ID, or flexible input spelling.
+
+    Exact normalized matches take priority over partial matches.
+    Original move data is returned unchanged.
+    """
     needle = normalize_move(query)
 
     if not needle:
@@ -317,7 +350,11 @@ def find_moves(moves, query):
 
         if needle in searchable:
             exact.append(move)
-        elif any(needle in value for value in searchable if value):
+        elif any(
+            needle in value
+            for value in searchable
+            if value
+        ):
             partial.append(move)
 
     return exact or partial
@@ -338,7 +375,9 @@ def image_filenames(raw_images):
     for value in values:
         filename = clean_value(value)
         filename = re.sub(
-            r"^\s*(?:File|Image)\s*:\s*", "", filename,
+            r"^\s*(?:File|Image)\s*:\s*",
+            "",
+            filename,
             flags=re.IGNORECASE,
         )
         filename = filename.strip()
@@ -378,3 +417,4 @@ def get_image_url(filename):
             return imageinfo[0].get("url")
 
     return None
+```
