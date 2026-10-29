@@ -90,7 +90,7 @@ def make_move_embed(character, move, stale):
 
 
 def download_image(image_url):
-    """Download original image bytes without resizing."""
+    """Download the image bytes without resizing."""
     response = dc.SESSION.get(
         image_url,
         timeout=dc.REQUEST_TIMEOUT,
@@ -107,7 +107,6 @@ def download_image(image_url):
 
 
 def safe_attachment_name(filename, number):
-    """Create a unique, Discord-friendly attachment filename."""
     filename = filename.rsplit("/", 1)[-1]
     filename = re.sub(r"[^A-Za-z0-9._-]+", "_", filename)
 
@@ -124,10 +123,10 @@ async def send_in_batches(interaction, embeds):
         )
 
 
-async def send_image_batches(interaction, image_items):
-    """Send original image attachments with their corresponding embeds."""
-    for start in range(0, len(image_items), 10):
-        batch = image_items[start:start + 10]
+async def send_image_pairs(interaction, image_items):
+    """Send at most two image embeds and files per message."""
+    for start in range(0, len(image_items), 2):
+        batch = image_items[start:start + 2]
 
         embeds = [item[0] for item in batch]
         files = [item[1] for item in batch]
@@ -193,15 +192,12 @@ async def fd(
         )
         return
 
-    # Send frame-data embeds first.
     move_embeds = [
         make_move_embed(character, item, stale)
         for item in matches
     ]
     await send_in_batches(interaction, move_embeds)
 
-    # Download and attach every distinct animation and hitbox image.
-    # Animation and hitbox embeds use the same character/move heading.
     image_items = []
     seen = set()
     image_number = 0
@@ -246,9 +242,6 @@ async def fd(
                         color=discord.Color.dark_gold(),
                         url=dc.source_page_url(character),
                     )
-
-                    # The bot does not set fixed dimensions or resize
-                    # the image. Discord still controls its rendering.
                     image_embed.set_image(
                         url=f"attachment://{attachment_name}"
                     )
@@ -266,13 +259,14 @@ async def fd(
                     )
 
     if image_items:
-        await send_image_batches(interaction, image_items)
+        await send_image_pairs(interaction, image_items)
 
     print(
         f"/fd: {interaction.user} searched "
         f"{character} for {move!r}; "
         f"{len(matches)} move(s), "
-        f"{len(image_items)} image(s)."
+        f"{len(image_items)} image(s), "
+        f"{(len(image_items) + 1) // 2} image message(s)."
     )
 
 
