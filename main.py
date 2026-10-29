@@ -1,6 +1,8 @@
 
 import os
 import asyncio
+import io
+import re
 
 import discord
 from discord import app_commands
@@ -48,10 +50,9 @@ def get_field(move, *names):
 
 def make_move_embed(character, move, stale):
     move_input = value_text(get_field(move, "input"))
-    title = f"{character} — {move_input}"
 
     embed = discord.Embed(
-        title=title,
+        title=f"{character} — {move_input}",
         color=discord.Color.gold(),
         url=dc.source_page_url(character),
     )
@@ -88,10 +89,53 @@ def make_move_embed(character, move, stale):
     return embed
 
 
+def download_image(image_url):
+    """Download original image bytes without resizing."""
+    response = dc.SESSION.get(
+        image_url,
+        timeout=dc.REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    content_type = response.headers.get("Content-Type", "").lower()
+    if not content_type.startswith("image/"):
+        raise ValueError(
+            f"Source did not return an image: {content_type}"
+        )
+
+    return response.content
+
+
+def safe_attachment_name(filename, number):
+    """Create a unique, Discord-friendly attachment filename."""
+    filename = filename.rsplit("/", 1)[-1]
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", filename)
+
+    if not filename:
+        filename = "image.png"
+
+    return f"image_{number}_{filename}"
+
+
 async def send_in_batches(interaction, embeds):
     for start in range(0, len(embeds), 10):
-        batch = embeds[start:start + 10]
-        await interaction.followup.send(embeds=batch)
+        await interaction.followup.send(
+            embeds=embeds[start:start + 10]
+        )
+
+
+async def send_image_batches(interaction, image_items):
+    """Send original image attachments with their corresponding embeds."""
+    for start in range(0, len(image_items), 10):
+        batch = image_items[start:start + 10]
+
+        embeds = [item[0] for item in batch]
+        files = [item[1] for item in batch]
+
+        await interaction.followup.send(
+            embeds=embeds,
+            files=files,
+        )
 
 
 @bot.tree.command(
@@ -149,32 +193,29 @@ async def fd(
         )
         return
 
-    # Send the frame-data embeds first.
+    # Send frame-data embeds first.
     move_embeds = [
         make_move_embed(character, item, stale)
         for item in matches
     ]
     await send_in_batches(interaction, move_embeds)
 
-    # Send every distinct animation and hitbox image associated
-    # with the matching moves, using the original source URL.
-    image_embeds = []
+    # Download and attach every distinct animation and hitbox image.
+    # Animation and hitbox embeds use the same character/move heading.
+    image_items = []
     seen = set()
+    image_number = 0
 
     for item in matches:
         move_input = value_text(get_field(item, "input"))
+        heading = f"{character} — {move_input}"
 
-        for image_key, image_type in (
-            ("images", "Animation"),
-            ("hitboxes", "Hitbox"),
-        ):
+        for image_key in ("images", "hitboxes"):
             raw_images = item.get(image_key)
             if not raw_images:
                 continue
 
-            filenames = dc.image_filenames(raw_images)
-
-            for filename in filenames:
+            for filename in dc.image_filenames(raw_images):
                 if filename in seen:
                     continue
 
@@ -184,39 +225,54 @@ async def fd(
                     image_url = await asyncio.to_thread(
                         dc.get_image_url, filename
                     )
+
+                    if not image_url:
+                        print(
+                            f"No source image URL found for {filename}"
+                        )
+                        continue
+
+                    image_bytes = await asyncio.to_thread(
+                        download_image, image_url
+                    )
+
+                    image_number += 1
+                    attachment_name = safe_attachment_name(
+                        filename, image_number
+                    )
+
+                    image_embed = discord.Embed(
+                        title=heading,
+                        color=discord.Color.dark_gold(),
+                        url=dc.source_page_url(character),
+                    )
+
+                    # The bot does not set fixed dimensions or resize
+                    # the image. Discord still controls its rendering.
+                    image_embed.set_image(
+                        url=f"attachment://{attachment_name}"
+                    )
+
+                    image_file = discord.File(
+                        io.BytesIO(image_bytes),
+                        filename=attachment_name,
+                    )
+
+                    image_items.append((image_embed, image_file))
+
                 except Exception as exc:
                     print(
-                        f"Image lookup failed for {filename}: {exc}"
+                        f"Image processing failed for {filename}: {exc}"
                     )
-                    continue
 
-                if not image_url:
-                    print(f"No source image URL found for {filename}")
-                    continue
-
-                image_embed = discord.Embed(
-                    title=(
-                        f"{character} — {move_input} — {image_type}"
-                    ),
-                    color=discord.Color.dark_gold(),
-                    url=dc.source_page_url(character),
-                )
-
-                # No fixed width or height is applied here.
-                # Discord receives the original image URL returned
-                # by Dream Cancel's MediaWiki image information API.
-                # Discord still controls the final on-screen rendering.
-                image_embed.set_image(url=image_url)
-                image_embeds.append(image_embed)
-
-    if image_embeds:
-        await send_in_batches(interaction, image_embeds)
+    if image_items:
+        await send_image_batches(interaction, image_items)
 
     print(
         f"/fd: {interaction.user} searched "
         f"{character} for {move!r}; "
         f"{len(matches)} move(s), "
-        f"{len(image_embeds)} image(s)."
+        f"{len(image_items)} image(s)."
     )
 
 
