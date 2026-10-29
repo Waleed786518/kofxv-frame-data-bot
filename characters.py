@@ -1,0 +1,21 @@
+
+ROSTER = [
+    "Andy Bogard", "Ángel", "Antonov", "Ash Crimson",
+    "Athena Asamiya", "B.Jenet", "Benimaru Nikaido",
+    "Billy Kane", "Blue Mary", "Chizuru Kagura", "Chris",
+    "Clark Still", "Darli Dagger", "Dolores", "Duo Lon",
+    "Elisabeth Blanctorche", "Gato", "Geese Howard",
+    "Goenitz", "Haohmaru", "Heidern", "Hinako Shijo",
+    "Iori Yagami", "Isla", "Joe Higashi", "K'",
+    "Kim Kaphwan", "King", "King of Dinosaurs", "Krohnen",
+    "Kukri", "Kula Diamond", "Kyo Kusanagi",
+    "Leona Heidern", "Luong", "Mai Shiranui", "Mature",
+    "Maxima", "Meitenkun", "Nakoruru", "Najd",
+    "Omega Rugal", "Orochi Chris", "Orochi Shermie",
+    "Orochi Yashiro", "Ralf Jones", "Ramón",
+    "Robert Garcia", "Rock Howard", "Ryo Sakazaki",
+    "Shermie", "Shingo Yabuki", "Shun'ei",
+    "Sylvie Paula Paula", "Terry Bogard", "Vanessa",
+    "Vice", "Whip", "Ryuji Yamazaki",
+    "Yashiro Nanakase", "Yuri Sakazaki",
+]
