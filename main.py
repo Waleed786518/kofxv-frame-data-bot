@@ -1,13 +1,14 @@
 
 import os
 import asyncio
-import re
 import io
+import re
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+from PIL import Image
 
 from characters import ROSTER
 import dream_cancel as dc
@@ -91,7 +92,6 @@ def make_move_embed(character, move, stale):
 
 
 def download_image(image_url):
-    """Download the original image without adding margin or padding."""
     response = dc.SESSION.get(
         image_url,
         timeout=dc.REQUEST_TIMEOUT,
@@ -107,14 +107,39 @@ def download_image(image_url):
     return response.content
 
 
+def add_image_margin(image_bytes, margin_ratio=0.30):
+    """Add 30% transparent padding on every side without cropping."""
+    with Image.open(io.BytesIO(image_bytes)) as source:
+        image = source.convert("RGBA")
+
+    margin_x = max(1, round(image.width * margin_ratio))
+    margin_y = max(1, round(image.height * margin_ratio))
+
+    canvas = Image.new(
+        "RGBA",
+        (
+            image.width + margin_x * 2,
+            image.height + margin_y * 2,
+        ),
+        (0, 0, 0, 0),
+    )
+
+    canvas.alpha_composite(image, (margin_x, margin_y))
+
+    output = io.BytesIO()
+    canvas.save(output, format="PNG")
+    return output.getvalue()
+
+
 def safe_attachment_name(filename, number):
     filename = filename.rsplit("/", 1)[-1]
     filename = re.sub(r"[^A-Za-z0-9._-]+", "_", filename)
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
 
-    if not filename:
-        filename = "image.png"
+    if not stem:
+        stem = "image"
 
-    return f"image_{number}_{filename}"
+    return f"image_{number}_{stem}.png"
 
 
 async def send_in_batches(interaction, embeds):
@@ -124,12 +149,14 @@ async def send_in_batches(interaction, embeds):
         )
 
 
-async def send_images_individually(interaction, image_items):
-    """Send each image separately for a larger Discord preview."""
-    for embed, image_file in image_items:
+async def send_image_pairs(interaction, image_items):
+    """Send up to two image embeds per Discord message."""
+    for start in range(0, len(image_items), 2):
+        batch = image_items[start:start + 2]
+
         await interaction.followup.send(
-            embed=embed,
-            file=image_file,
+            embeds=[item[0] for item in batch],
+            files=[item[1] for item in batch],
         )
 
 
@@ -189,11 +216,13 @@ async def fd(
         )
         return
 
-    move_embeds = [
-        make_move_embed(character, item, stale)
-        for item in matches
-    ]
-    await send_in_batches(interaction, move_embeds)
+    await send_in_batches(
+        interaction,
+        [
+            make_move_embed(character, item, stale)
+            for item in matches
+        ],
+    )
 
     image_items = []
     seen = set()
@@ -226,9 +255,14 @@ async def fd(
                         )
                         continue
 
-                    image_bytes = await asyncio.to_thread(
+                    original_bytes = await asyncio.to_thread(
                         download_image,
                         image_url,
+                    )
+
+                    padded_bytes = await asyncio.to_thread(
+                        add_image_margin,
+                        original_bytes,
                     )
 
                     image_number += 1
@@ -247,7 +281,7 @@ async def fd(
                     )
 
                     image_file = discord.File(
-                        io.BytesIO(image_bytes),
+                        io.BytesIO(padded_bytes),
                         filename=attachment_name,
                     )
 
@@ -259,10 +293,7 @@ async def fd(
                     )
 
     if image_items:
-        await send_images_individually(
-            interaction,
-            image_items,
-        )
+        await send_image_pairs(interaction, image_items)
 
     print(
         f"/fd: {interaction.user} searched "
@@ -279,13 +310,11 @@ async def character_autocomplete(
 ):
     current = current.casefold()
 
-    results = [
+    return [
         app_commands.Choice(name=name, value=name)
         for name in ROSTER
         if current in name.casefold()
-    ]
-
-    return results[:25]
+    ][:25]
 
 
 @bot.event
