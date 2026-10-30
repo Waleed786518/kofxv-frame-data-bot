@@ -1,4 +1,4 @@
-```python
+
 import json
 import re
 import time
@@ -417,4 +417,3 @@ def get_image_url(filename):
             return imageinfo[0].get("url")
 
     return None
-```
